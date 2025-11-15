@@ -103,6 +103,9 @@ system automatically."
     (error ":client is required"))
   (unless (map-elt client :command)
     (error ":command is required"))
+  ;; When `default-directory' is a TRAMP path, the REMOTE parameter tells
+  ;; `executable-find' to search on the remote system.  This ensures the
+  ;; executable exists before attempting to start the process.
   (unless (executable-find (map-elt client :command) (file-remote-p default-directory))
     (error "\"%s\" command line utility not found.  Please install it" (map-elt client :command)))
   (when (acp--client-started-p client)
@@ -126,6 +129,9 @@ system automatically."
                                    (acp--log client "API-ERROR" "%s" (string-trim raw-output))
                                    (dolist (handler (map-elt client :error-handlers))
                                      (funcall handler api-error)))))))
+    ;; `make-process' automatically executes the command on the remote system
+    ;; when `default-directory' is a TRAMP path.  No additional configuration
+    ;; is needed - TRAMP handles routing stdin/stdout/stderr transparently.
     (let ((process (make-process
                     :name (format "acp-client(%s)-%s"
                                   (map-elt client :command)
