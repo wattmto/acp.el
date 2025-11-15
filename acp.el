@@ -49,6 +49,7 @@
 (defvar acp-instance-count 0)
 
 (cl-defun acp-make-client (&key context-buffer command command-params environment-variables
+                                default-directory
                                 request-sender notification-sender request-resolver
                                 response-sender)
   "Create an ACP client.
@@ -66,6 +67,8 @@ unless overridden by them.  For example:
 COMMAND is the binary or command-line utility to invoke.
 COMMAND-PARAMS is a list of strings for command arguments.
 ENVIRONMENT-VARIABLES is a list of strings in the form \"VAR=foo\".
+DEFAULT-DIRECTORY is the directory in which to run the command.
+If it is a TRAMP path, the command will be run on the remote system.
 
 REQUEST-SENDER, NOTIFICATION-SENDER, REQUEST-RESOLVER, and RESPONSE-SENDER are
 functions for advanced customization or testing."
@@ -77,6 +80,7 @@ functions for advanced customization or testing."
         (cons :command command)
         (cons :command-params command-params)
         (cons :environment-variables environment-variables)
+        (cons :default-directory default-directory)
         (cons :pending-requests ())
         (cons :request-id 0)
         (cons :notification-handlers ())
@@ -98,87 +102,90 @@ functions for advanced customization or testing."
     (error ":client is required"))
   (unless (map-elt client :command)
     (error ":command is required"))
-  (unless (executable-find (map-elt client :command))
-    (error "\"%s\" command line utility not found.  Please install it" (map-elt client :command)))
-  (when (acp--client-started-p client)
-    (error "Client already started"))
-  (let* ((pending-input "")
-         (message-queue nil)
-         (message-queue-busy nil)
-         (process-environment (append (map-elt client :environment-variables)
-                                      process-environment))
-         (stderr-buffer (get-buffer-create (format "acp-client-stderr(%s)-%s"
-                                                   (map-elt client :command)
-                                                   (map-elt client :instance-count))))
-         (stderr-proc (make-pipe-process
-                       :name (format "acp-client-stderr(%s)-%s"
-                                     (map-elt client :command)
-                                     (map-elt client :instance-count))
-                       :buffer stderr-buffer
-                       :filter (lambda (_process raw-output)
-                                 (acp--log client "STDERR" "%s" (string-trim raw-output))
-                                 (when-let ((api-error (acp--parse-stderr-api-error raw-output)))
-                                   (acp--log client "API-ERROR" "%s" (string-trim raw-output))
-                                   (dolist (handler (map-elt client :error-handlers))
-                                     (funcall handler api-error)))))))
-    (let ((process (make-process
-                    :name (format "acp-client(%s)-%s"
-                                  (map-elt client :command)
-                                  (map-elt client :instance-count))
-                    :command (cons (map-elt client :command)
-                                   (map-elt client :command-params))
-                    :stderr stderr-proc
-                    :connection-type 'pipe
-                    :filter (lambda (_proc input)
-                              (acp--log client "INCOMING TEXT" "%s" input)
-                              (setq pending-input (concat pending-input input))
-                              (let ((start 0) pos)
-                                (while (setq pos (string-search "\n" pending-input start))
-                                  (let ((json (substring pending-input start pos)))
-                                    (acp--log client "INCOMING LINE" "%s" json)
-                                    (when-let* ((object (condition-case nil
-                                                            (acp--parse-json json)
-                                                          (error
-                                                           (acp--log client "JSON PARSE ERROR" "Invalid JSON: %s" json)
-                                                           nil))))
-                                      (setq message-queue
-                                            (append message-queue
-                                                    (list (acp--make-message :json json :object object))))
-                                      (unless message-queue-busy
-                                        (setq message-queue-busy t)
-                                        (run-at-time 0 nil
-                                                     (lambda ()
-                                                       (while message-queue
-                                                         (let ((message (car message-queue)))
-                                                           (setq message-queue (cdr message-queue))
-                                                           (acp--route-incoming-message
-                                                            :message message
-                                                            :client client
-                                                            :on-notification
-                                                            (lambda (notification)
-                                                              (dolist (handler (map-elt client :notification-handlers))
-                                                                (condition-case-unless-debug err
-                                                                    (funcall handler notification)
-                                                                  (error
-                                                                   (acp--log client "NOTIFICATION HANDLER ERROR"
-                                                                             "Failed with error: %S" err)))))
-                                                            :on-request
-                                                            (lambda (request)
-                                                              (dolist (handler (map-elt client :request-handlers))
-                                                                (condition-case-unless-debug err
-                                                                    (funcall handler request)
-                                                                  (error
-                                                                   (acp--log client "REQUEST HANDLER ERROR"
-                                                                             "Failed with error: %S" err))))))))
-                                                       (setq message-queue-busy nil))))))
-                                  (setq start (1+ pos)))
-                                (setq pending-input (substring pending-input start))))
-                    :sentinel (lambda (_process _event)
-                                (when (process-live-p stderr-proc)
-                                  (delete-process stderr-proc))
-                                (when (buffer-live-p stderr-buffer)
-                                  (kill-buffer stderr-buffer))))))
-      (map-put! client :process process))))
+  (let ((default-directory (or (map-elt client :default-directory)
+                               default-directory)))
+    (unless (executable-find (map-elt client :command))
+      (error "\"%s\" command line utility not found.  Please install it" (map-elt client :command)))
+    (when (acp--client-started-p client)
+      (error "Client already started"))
+    (let* ((pending-input "")
+           (message-queue nil)
+           (message-queue-busy nil)
+           (process-environment (append (map-elt client :environment-variables)
+                                        process-environment))
+           (stderr-buffer (get-buffer-create (format "acp-client-stderr(%s)-%s"
+                                                     (map-elt client :command)
+                                                     (map-elt client :instance-count))))
+           (stderr-proc (make-pipe-process
+                         :name (format "acp-client-stderr(%s)-%s"
+                                       (map-elt client :command)
+                                       (map-elt client :instance-count))
+                         :buffer stderr-buffer
+                         :filter (lambda (_process raw-output)
+                                   (acp--log client "STDERR" "%s" (string-trim raw-output))
+                                   (when-let ((api-error (acp--parse-stderr-api-error raw-output)))
+                                     (acp--log client "API-ERROR" "%s" (string-trim raw-output))
+                                     (dolist (handler (map-elt client :error-handlers))
+                                       (funcall handler api-error)))))))
+      (let ((process (make-process
+                      :name (format "acp-client(%s)-%s"
+                                    (map-elt client :command)
+                                    (map-elt client :instance-count))
+                      :command (cons (map-elt client :command)
+                                     (map-elt client :command-params))
+                      :stderr stderr-proc
+                      :connection-type 'pipe
+                      :filter (lambda (_proc input)
+                                (acp--log client "INCOMING TEXT" "%s" input)
+                                (setq pending-input (concat pending-input input))
+                                (let ((start 0) pos)
+                                  (while (setq pos (string-search "\n" pending-input start))
+                                    (let ((json (substring pending-input start pos)))
+                                      (acp--log client "INCOMING LINE" "%s" json)
+                                      (when-let* ((object (condition-case nil
+                                                              (acp--parse-json json)
+                                                            (error
+                                                             (acp--log client "JSON PARSE ERROR" "Invalid JSON: %s" json)
+                                                             nil))))
+                                        (setq message-queue
+                                              (append message-queue
+                                                      (list (acp--make-message :json json :object object))))
+                                        (unless message-queue-busy
+                                          (setq message-queue-busy t)
+                                          (run-at-time 0 nil
+                                                       (lambda ()
+                                                         (while message-queue
+                                                           (let ((message (car message-queue)))
+                                                             (setq message-queue (cdr message-queue))
+                                                             (acp--route-incoming-message
+                                                              :message message
+                                                              :client client
+                                                              :on-notification
+                                                              (lambda (notification)
+                                                                (dolist (handler (map-elt client :notification-handlers))
+                                                                  (condition-case-unless-debug err
+                                                                      (funcall handler notification)
+                                                                    (error
+                                                                     (acp--log client "NOTIFICATION HANDLER ERROR"
+                                                                               "Failed with error: %S" err)))))
+                                                              :on-request
+                                                              (lambda (request)
+                                                                (dolist (handler (map-elt client :request-handlers))
+                                                                  (condition-case-unless-debug err
+                                                                      (funcall handler request)
+                                                                    (error
+                                                                     (acp--log client "REQUEST HANDLER ERROR"
+                                                                               "Failed with error: %S" err))))))))
+                                                         (setq message-queue-busy nil))))))
+                                    (setq start (1+ pos)))
+                                  (setq pending-input (substring pending-input start))))
+                      :sentinel (lambda (_process _event)
+                                  (when (process-live-p stderr-proc)
+                                    (delete-process stderr-proc))
+                                  (when (buffer-live-p stderr-buffer)
+                                    (kill-buffer stderr-buffer))))))
+        (map-put! client :process process)))))
+
 
 (cl-defun acp-subscribe-to-notifications (&key client on-notification buffer)
   "Subscribe to incoming CLIENT notifications.
