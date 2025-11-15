@@ -103,7 +103,7 @@ system automatically."
     (error ":client is required"))
   (unless (map-elt client :command)
     (error ":command is required"))
-  (unless (executable-find (map-elt client :command))
+  (unless (executable-find (map-elt client :command) (file-remote-p default-directory))
     (error "\"%s\" command line utility not found.  Please install it" (map-elt client :command)))
   (when (acp--client-started-p client)
     (error "Client already started"))
