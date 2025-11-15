@@ -49,7 +49,6 @@
 (defvar acp-instance-count 0)
 
 (cl-defun acp-make-client (&key context-buffer command command-params environment-variables
-                                default-directory
                                 request-sender notification-sender request-resolver
                                 response-sender)
   "Create an ACP client.
@@ -67,11 +66,12 @@ unless overridden by them.  For example:
 COMMAND is the binary or command-line utility to invoke.
 COMMAND-PARAMS is a list of strings for command arguments.
 ENVIRONMENT-VARIABLES is a list of strings in the form \"VAR=foo\".
-DEFAULT-DIRECTORY is the directory in which to run the command.
-If it is a TRAMP path, the command will be run on the remote system.
 
 REQUEST-SENDER, NOTIFICATION-SENDER, REQUEST-RESOLVER, and RESPONSE-SENDER are
-functions for advanced customization or testing."
+functions for advanced customization or testing.
+
+The client captures the current `default-directory' at creation time.
+If `default-directory' is a TRAMP path, commands will be executed on the remote system."
   (unless command
     (error ":command is required"))
   (list (cons :context-buffer context-buffer)
