@@ -121,22 +121,27 @@ system automatically."
     ;; Set up stderr buffer monitoring for API error parsing
     ;; Since TRAMP doesn't support pipe processes, we monitor buffer changes instead
     (with-current-buffer stderr-buffer
-      (add-hook 'after-change-functions
-                (lambda (_beg _end _len)
-                  (save-excursion
-                    (goto-char (point-min))
-                    (while (not (eobp))
-                      (let ((line (buffer-substring-no-properties
-                                   (line-beginning-position)
-                                   (line-end-position))))
-                        (when (not (string-empty-p line))
-                          (acp--log client "STDERR" "%s" (string-trim line))
-                          (when-let ((api-error (acp--parse-stderr-api-error line)))
-                            (acp--log client "API-ERROR" "%s" (string-trim line))
-                            (dolist (handler (map-elt client :error-handlers))
-                              (funcall handler api-error)))))
-                      (forward-line 1))))
-                nil t))
+      (let ((last-pos (make-marker)))
+        (set-marker last-pos (point-min))
+        (add-hook 'after-change-functions
+                  (lambda (_beg _end _len)
+                    ;; Only process new content from last-pos to end of buffer
+                    (save-excursion
+                      (goto-char (marker-position last-pos))
+                      (while (not (eobp))
+                        (let ((line (buffer-substring-no-properties
+                                     (line-beginning-position)
+                                     (line-end-position))))
+                          (when (not (string-empty-p line))
+                            (acp--log client "STDERR" "%s" (string-trim line))
+                            (when-let ((api-error (acp--parse-stderr-api-error line)))
+                              (acp--log client "API-ERROR" "%s" (string-trim line))
+                              (dolist (handler (map-elt client :error-handlers))
+                                (funcall handler api-error)))))
+                        (forward-line 1))
+                      ;; Update marker to current position
+                      (set-marker last-pos (point))))
+                  nil t)))
     ;; `make-process' automatically executes the command on the remote system
     ;; when `default-directory' is a TRAMP path.  The `:file-handler t' parameter
     ;; ensures TRAMP's file name handler is invoked for remote execution.
