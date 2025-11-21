@@ -154,7 +154,6 @@ system automatically."
                                   (map-elt client :instance-count))
                     :command (cons (map-elt client :command)
                                    (map-elt client :command-params))
-                    :buffer (get-buffer-create " *acp-test*")
                     :stderr stderr-buffer
                     :connection-type 'pipe
                     :file-handler t
