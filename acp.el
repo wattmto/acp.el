@@ -130,8 +130,9 @@ system automatically."
                                    (dolist (handler (map-elt client :error-handlers))
                                      (funcall handler api-error)))))))
     ;; `make-process' automatically executes the command on the remote system
-    ;; when `default-directory' is a TRAMP path.  No additional configuration
-    ;; is needed - TRAMP handles routing stdin/stdout/stderr transparently.
+    ;; when `default-directory' is a TRAMP path.  The `:file-handler t' parameter
+    ;; ensures TRAMP's file name handler is invoked for remote execution.
+    ;; TRAMP handles routing stdin/stdout/stderr transparently.
     (let ((process (make-process
                     :name (format "acp-client(%s)-%s"
                                   (map-elt client :command)
@@ -140,6 +141,7 @@ system automatically."
                                    (map-elt client :command-params))
                     :stderr stderr-proc
                     :connection-type 'pipe
+                    :file-handler t
                     :filter (lambda (_proc input)
                               (acp--log client "INCOMING TEXT" "%s" input)
                               (setq pending-input (concat pending-input input))
