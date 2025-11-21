@@ -118,12 +118,31 @@ system automatically."
          (stderr-buffer (get-buffer-create (format "acp-client-stderr(%s)-%s"
                                                    (map-elt client :command)
                                                    (map-elt client :instance-count)))))
+    ;; Set up stderr buffer monitoring for API error parsing
+    ;; Since TRAMP doesn't support pipe processes, we monitor buffer changes instead
+    (with-current-buffer stderr-buffer
+      (add-hook 'after-change-functions
+                (lambda (_beg _end _len)
+                  (save-excursion
+                    (goto-char (point-min))
+                    (while (not (eobp))
+                      (let ((line (buffer-substring-no-properties
+                                   (line-beginning-position)
+                                   (line-end-position))))
+                        (when (not (string-empty-p line))
+                          (acp--log client "STDERR" "%s" (string-trim line))
+                          (when-let ((api-error (acp--parse-stderr-api-error line)))
+                            (acp--log client "API-ERROR" "%s" (string-trim line))
+                            (dolist (handler (map-elt client :error-handlers))
+                              (funcall handler api-error)))))
+                      (forward-line 1))))
+                nil t))
     ;; `make-process' automatically executes the command on the remote system
     ;; when `default-directory' is a TRAMP path.  The `:file-handler t' parameter
     ;; ensures TRAMP's file name handler is invoked for remote execution.
     ;; TRAMP handles routing stdin/stdout/stderr transparently.
     ;; Note: TRAMP doesn't support pipe processes, so we pass the buffer directly
-    ;; to :stderr instead of using make-pipe-process.
+    ;; to :stderr and use after-change-functions to monitor and parse stderr output.
     (let ((process (make-process
                     :name (format "acp-client(%s)-%s"
                                   (map-elt client :command)
