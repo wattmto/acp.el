@@ -117,29 +117,20 @@ system automatically."
                                       process-environment))
          (stderr-buffer (get-buffer-create (format "acp-client-stderr(%s)-%s"
                                                    (map-elt client :command)
-                                                   (map-elt client :instance-count))))
-         (stderr-proc (make-pipe-process
-                       :name (format "acp-client-stderr(%s)-%s"
-                                     (map-elt client :command)
-                                     (map-elt client :instance-count))
-                       :buffer stderr-buffer
-                       :filter (lambda (_process raw-output)
-                                 (acp--log client "STDERR" "%s" (string-trim raw-output))
-                                 (when-let ((api-error (acp--parse-stderr-api-error raw-output)))
-                                   (acp--log client "API-ERROR" "%s" (string-trim raw-output))
-                                   (dolist (handler (map-elt client :error-handlers))
-                                     (funcall handler api-error)))))))
+                                                   (map-elt client :instance-count)))))
     ;; `make-process' automatically executes the command on the remote system
     ;; when `default-directory' is a TRAMP path.  The `:file-handler t' parameter
     ;; ensures TRAMP's file name handler is invoked for remote execution.
     ;; TRAMP handles routing stdin/stdout/stderr transparently.
+    ;; Note: TRAMP doesn't support pipe processes, so we pass the buffer directly
+    ;; to :stderr instead of using make-pipe-process.
     (let ((process (make-process
                     :name (format "acp-client(%s)-%s"
                                   (map-elt client :command)
                                   (map-elt client :instance-count))
                     :command (cons (map-elt client :command)
                                    (map-elt client :command-params))
-                    :stderr stderr-proc
+                    :stderr stderr-buffer
                     :connection-type 'pipe
                     :file-handler t
                     :filter (lambda (_proc input)
@@ -187,8 +178,6 @@ system automatically."
                                   (setq start (1+ pos)))
                                 (setq pending-input (substring pending-input start))))
                     :sentinel (lambda (_process _event)
-                                (when (process-live-p stderr-proc)
-                                  (delete-process stderr-proc))
                                 (when (buffer-live-p stderr-buffer)
                                   (kill-buffer stderr-buffer))))))
       (map-put! client :process process))))
