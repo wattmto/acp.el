@@ -369,7 +369,7 @@ SYNC: When non-nil, send request synchronously."
     (let ((json (acp--serialize-json request)))
       (acp--log client "OUTGOING TEXT" "%s" json)
       (acp--log-traffic client 'outgoing 'request (acp--make-message :object request :json json))
-      (process-send-string proc (concat json "\n")))
+      (process-send-string proc json))
     (when sync
       (while (not done)
         (accept-process-output proc 0.01))
@@ -403,7 +403,7 @@ SYNC: When non-nil, send request synchronously."
                        (result . ,result-data))))
       (let ((json (acp--serialize-json response)))
         (acp--log-traffic client 'outgoing 'response (acp--make-message :object response :json json))
-        (process-send-string proc (concat json "\n"))))))
+        (process-send-string proc json)))))
 
 (cl-defun acp--notification-sender (&key client notification sync)
   "Send NOTIFICATION from CLIENT.
@@ -430,7 +430,7 @@ When non-nil SYNC, send notification synchronously."
     (let ((json (acp--serialize-json notification)))
       (acp--log client "OUTGOING TEXT" "%s" json)
       (acp--log-traffic client 'outgoing 'notification (acp--make-message :object notification :json json))
-      (process-send-string proc (concat json "\n")))
+      (process-send-string proc json))
     (when sync
       (while (not done)
         (accept-process-output proc 0.01))
