@@ -148,7 +148,12 @@ system automatically."
     ;; TRAMP handles routing stdin/stdout/stderr transparently.
     ;; Note: TRAMP doesn't support pipe processes, so we pass the buffer directly
     ;; to :stderr and use after-change-functions to monitor and parse stderr output.
-    (let ((process (make-process
+    ;; bug#61350: Disable SSH ControlMaster for TRAMP - it can't handle much data.
+    ;; This follows the same pattern used by eglot.el for remote LSP servers.
+    (let* ((tramp-use-ssh-controlmaster-options 'suppress)
+           (tramp-ssh-controlmaster-options
+            "-o ControlMaster=no -o ControlPath=none")
+           (process (make-process
                     :name (format "acp-client(%s)-%s"
                                   (map-elt client :command)
                                   (map-elt client :instance-count))
