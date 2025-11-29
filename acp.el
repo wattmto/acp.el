@@ -125,15 +125,11 @@ On remote hosts, wraps in shell to disable TTY line buffering."
     (error ":client is required"))
   (unless (map-elt client :command)
     (error ":command is required"))
-  (unless (executable-find (map-elt client :command) (acp--remote-p client))
-    (error "\"%s\" command not found%s.  Please install it"
-           (map-elt client :command)
-           (if (acp--remote-p client)
-               (format " on remote host %s" (file-remote-p (acp--default-directory client)))
-             "")))
   (when (acp--client-started-p client)
     (error "Client already started"))
+  ;; Bind default-directory first so TRAMP operations use the correct host
   (let* ((default-directory (acp--default-directory client))
+         (remote (file-remote-p default-directory))
          (pending-input "")
          (message-queue nil)
          (message-queue-busy nil)
@@ -142,6 +138,10 @@ On remote hosts, wraps in shell to disable TTY line buffering."
          (stderr-buffer (get-buffer-create (format "*acp-client-stderr(%s)-%s*"
                                                    (map-elt client :command)
                                                    (map-elt client :instance-count)))))
+    (unless (executable-find (map-elt client :command) remote)
+      (error "\"%s\" command not found%s.  Please install it"
+             (map-elt client :command)
+             (if remote (format " on remote host %s" remote) "")))
     (let ((process (make-process
                     :name (format "acp-client(%s)-%s"
                                   (map-elt client :command)
