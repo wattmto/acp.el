@@ -92,43 +92,64 @@ functions for advanced customization or testing."
   (and (map-elt client :process)
        (process-live-p (map-elt client :process))))
 
+(defun acp--default-directory (client)
+  "Get the effective default-directory for CLIENT.
+Uses context-buffer's directory if available, otherwise current `default-directory'."
+  (or (when-let ((buf (map-elt client :context-buffer)))
+        (when (buffer-live-p buf)
+          (buffer-local-value 'default-directory buf)))
+      default-directory))
+
+(defun acp--remote-p (client)
+  "Return non-nil if CLIENT should run on a remote host."
+  (file-remote-p (acp--default-directory client)))
+
+(defun acp--build-command (client)
+  "Build the command list for CLIENT, wrapping for remote if needed.
+On remote hosts, wraps in shell to disable TTY line buffering."
+  (let ((command (map-elt client :command))
+        (params (map-elt client :command-params)))
+    (if (acp--remote-p client)
+        ;; Use /bin/sh for remote (POSIX-standard, exists everywhere)
+        ;; instead of shell-file-name which is the LOCAL shell
+        (list "/bin/sh" "-c"
+              (string-join (cons "stty raw > /dev/null;"
+                                 (mapcar #'shell-quote-argument
+                                         (cons command params)))
+                           " "))
+      (cons command params))))
+
 (cl-defun acp--start-client (&key client)
   "Start CLIENT."
   (unless client
     (error ":client is required"))
   (unless (map-elt client :command)
     (error ":command is required"))
-  (unless (executable-find (map-elt client :command))
-    (error "\"%s\" command line utility not found.  Please install it" (map-elt client :command)))
+  (unless (executable-find (map-elt client :command) (acp--remote-p client))
+    (error "\"%s\" command not found%s.  Please install it"
+           (map-elt client :command)
+           (if (acp--remote-p client)
+               (format " on remote host %s" (file-remote-p (acp--default-directory client)))
+             "")))
   (when (acp--client-started-p client)
     (error "Client already started"))
-  (let* ((pending-input "")
+  (let* ((default-directory (acp--default-directory client))
+         (pending-input "")
          (message-queue nil)
          (message-queue-busy nil)
          (process-environment (append (map-elt client :environment-variables)
                                       process-environment))
-         (stderr-buffer (get-buffer-create (format "acp-client-stderr(%s)-%s"
+         (stderr-buffer (get-buffer-create (format "*acp-client-stderr(%s)-%s*"
                                                    (map-elt client :command)
-                                                   (map-elt client :instance-count))))
-         (stderr-proc (make-pipe-process
-                       :name (format "acp-client-stderr(%s)-%s"
-                                     (map-elt client :command)
-                                     (map-elt client :instance-count))
-                       :buffer stderr-buffer
-                       :filter (lambda (_process raw-output)
-                                 (acp--log client "STDERR" "%s" (string-trim raw-output))
-                                 (when-let ((api-error (acp--parse-stderr-api-error raw-output)))
-                                   (acp--log client "API-ERROR" "%s" (string-trim raw-output))
-                                   (dolist (handler (map-elt client :error-handlers))
-                                     (funcall handler api-error)))))))
+                                                   (map-elt client :instance-count)))))
     (let ((process (make-process
                     :name (format "acp-client(%s)-%s"
                                   (map-elt client :command)
                                   (map-elt client :instance-count))
-                    :command (cons (map-elt client :command)
-                                   (map-elt client :command-params))
-                    :stderr stderr-proc
+                    :command (acp--build-command client)
+                    :stderr stderr-buffer
                     :connection-type 'pipe
+                    :file-handler t
                     :filter (lambda (_proc input)
                               (acp--log client "INCOMING TEXT" "%s" input)
                               (setq pending-input (concat pending-input input))
@@ -174,10 +195,20 @@ functions for advanced customization or testing."
                                   (setq start (1+ pos)))
                                 (setq pending-input (substring pending-input start))))
                     :sentinel (lambda (_process _event)
-                                (when (process-live-p stderr-proc)
-                                  (delete-process stderr-proc))
+                                (when-let ((stderr-proc (get-buffer-process stderr-buffer)))
+                                  (when (process-live-p stderr-proc)
+                                    (delete-process stderr-proc)))
                                 (when (buffer-live-p stderr-buffer)
                                   (kill-buffer stderr-buffer))))))
+      ;; Set up stderr process filter for error handling
+      (when-let ((stderr-proc (get-buffer-process stderr-buffer)))
+        (set-process-filter stderr-proc
+                            (lambda (_process raw-output)
+                              (acp--log client "STDERR" "%s" (string-trim raw-output))
+                              (when-let ((api-error (acp--parse-stderr-api-error raw-output)))
+                                (acp--log client "API-ERROR" "%s" (string-trim raw-output))
+                                (dolist (handler (map-elt client :error-handlers))
+                                  (funcall handler api-error))))))
       (map-put! client :process process))))
 
 (cl-defun acp-subscribe-to-notifications (&key client on-notification buffer)
