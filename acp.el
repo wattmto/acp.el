@@ -156,6 +156,7 @@ system automatically."
                                    (map-elt client :command-params))
                     :stderr stderr-buffer
                     :connection-type 'pipe
+                    :coding 'utf-8-emacs-unix
                     :file-handler t
                     :filter (lambda (_proc input)
                               (acp--log client "INCOMING TEXT" "%s" input)
