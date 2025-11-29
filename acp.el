@@ -94,7 +94,8 @@ functions for advanced customization or testing."
 
 (defun acp--default-directory (client)
   "Get the effective default-directory for CLIENT.
-Uses context-buffer's directory if available, otherwise current `default-directory'."
+Uses context-buffer's directory if available, otherwise current
+`default-directory'."
   (or (when-let ((buf (map-elt client :context-buffer)))
         (when (buffer-live-p buf)
           (buffer-local-value 'default-directory buf)))
@@ -105,13 +106,11 @@ Uses context-buffer's directory if available, otherwise current `default-directo
   (file-remote-p (acp--default-directory client)))
 
 (defun acp--build-command (client)
-  "Build the command list for CLIENT, wrapping for remote if needed.
-On remote hosts, wraps in shell to disable TTY line buffering."
+  "Build the command list for CLIENT, wrapping for remote if needed."
   (let ((command (map-elt client :command))
         (params (map-elt client :command-params)))
     (if (acp--remote-p client)
-        ;; Use /bin/sh for remote (POSIX-standard, exists everywhere)
-        ;; instead of shell-file-name which is the LOCAL shell
+        ;; Wrap in shell for remote with stty raw to disable line buffering
         (list "/bin/sh" "-c"
               (string-join (cons "stty raw > /dev/null;"
                                  (mapcar #'shell-quote-argument
@@ -147,8 +146,8 @@ On remote hosts, wraps in shell to disable TTY line buffering."
                                   (map-elt client :command)
                                   (map-elt client :instance-count))
                     :command (acp--build-command client)
-                    :stderr stderr-buffer
                     :connection-type 'pipe
+                    :stderr stderr-buffer
                     :file-handler t
                     :filter (lambda (_proc input)
                               (acp--log client "INCOMING TEXT" "%s" input)
@@ -200,15 +199,6 @@ On remote hosts, wraps in shell to disable TTY line buffering."
                                     (delete-process stderr-proc)))
                                 (when (buffer-live-p stderr-buffer)
                                   (kill-buffer stderr-buffer))))))
-      ;; Set up stderr process filter for error handling
-      ;; (when-let ((stderr-proc (get-buffer-process stderr-buffer)))
-      ;;   (set-process-filter stderr-proc
-      ;;                       (lambda (_process raw-output)
-      ;;                         (acp--log client "STDERR" "%s" (string-trim raw-output))
-      ;;                         (when-let ((api-error (acp--parse-stderr-api-error raw-output)))
-      ;;                           (acp--log client "API-ERROR" "%s" (string-trim raw-output))
-      ;;                           (dolist (handler (map-elt client :error-handlers))
-      ;;                             (funcall handler api-error))))))
       (map-put! client :process process))))
 
 (cl-defun acp-subscribe-to-notifications (&key client on-notification buffer)
