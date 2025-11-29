@@ -68,7 +68,12 @@ COMMAND-PARAMS is a list of strings for command arguments.
 ENVIRONMENT-VARIABLES is a list of strings in the form \"VAR=foo\".
 
 REQUEST-SENDER, NOTIFICATION-SENDER, REQUEST-RESOLVER, and RESPONSE-SENDER are
-functions for advanced customization or testing."
+functions for advanced customization or testing.
+
+When the client is started, it will execute COMMAND in the current
+`default-directory'.  If `default-directory' is a TRAMP path (e.g.,
+\"/ssh:user@host:/path/\"), the command will be executed on the remote
+system automatically."
   (unless command
     (error ":command is required"))
   (list (cons :context-buffer context-buffer)
@@ -98,7 +103,10 @@ functions for advanced customization or testing."
     (error ":client is required"))
   (unless (map-elt client :command)
     (error ":command is required"))
-  (unless (executable-find (map-elt client :command))
+  ;; When `default-directory' is a TRAMP path, the REMOTE parameter tells
+  ;; `executable-find' to search on the remote system.  This ensures the
+  ;; executable exists before attempting to start the process.
+  (unless (executable-find (map-elt client :command) (file-remote-p default-directory))
     (error "\"%s\" command line utility not found.  Please install it" (map-elt client :command)))
   (when (acp--client-started-p client)
     (error "Client already started"))
@@ -109,26 +117,52 @@ functions for advanced customization or testing."
                                       process-environment))
          (stderr-buffer (get-buffer-create (format "acp-client-stderr(%s)-%s"
                                                    (map-elt client :command)
-                                                   (map-elt client :instance-count))))
-         (stderr-proc (make-pipe-process
-                       :name (format "acp-client-stderr(%s)-%s"
-                                     (map-elt client :command)
-                                     (map-elt client :instance-count))
-                       :buffer stderr-buffer
-                       :filter (lambda (_process raw-output)
-                                 (acp--log client "STDERR" "%s" (string-trim raw-output))
-                                 (when-let ((api-error (acp--parse-stderr-api-error raw-output)))
-                                   (acp--log client "API-ERROR" "%s" (string-trim raw-output))
-                                   (dolist (handler (map-elt client :error-handlers))
-                                     (funcall handler api-error)))))))
-    (let ((process (make-process
+                                                   (map-elt client :instance-count)))))
+    ;; Set up stderr buffer monitoring for API error parsing
+    ;; Since TRAMP doesn't support pipe processes, we monitor buffer changes instead
+    (with-current-buffer stderr-buffer
+      (let ((last-pos (make-marker)))
+        (set-marker last-pos (point-min))
+        (add-hook 'after-change-functions
+                  (lambda (_beg _end _len)
+                    ;; Only process new content from last-pos to end of buffer
+                    (save-excursion
+                      (goto-char (marker-position last-pos))
+                      (while (not (eobp))
+                        (let ((line (buffer-substring-no-properties
+                                     (line-beginning-position)
+                                     (line-end-position))))
+                          (when (not (string-empty-p line))
+                            (acp--log client "STDERR" "%s" (string-trim line))
+                            (when-let ((api-error (acp--parse-stderr-api-error line)))
+                              (acp--log client "API-ERROR" "%s" (string-trim line))
+                              (dolist (handler (map-elt client :error-handlers))
+                                (funcall handler api-error)))))
+                        (forward-line 1))
+                      ;; Update marker to current position
+                      (set-marker last-pos (point))))
+                  nil t)))
+    ;; `make-process' automatically executes the command on the remote system
+    ;; when `default-directory' is a TRAMP path.  The `:file-handler t' parameter
+    ;; ensures TRAMP's file name handler is invoked for remote execution.
+    ;; TRAMP handles routing stdin/stdout/stderr transparently.
+    ;; Note: TRAMP doesn't support pipe processes, so we pass the buffer directly
+    ;; to :stderr and use after-change-functions to monitor and parse stderr output.
+    ;; bug#61350: Disable SSH ControlMaster for TRAMP - it can't handle much data.
+    ;; This follows the same pattern used by eglot.el for remote LSP servers.
+    (let* ((tramp-use-ssh-controlmaster-options 'suppress)
+           (tramp-ssh-controlmaster-options
+            "-o ControlMaster=no -o ControlPath=none")
+           (process (make-process
                     :name (format "acp-client(%s)-%s"
                                   (map-elt client :command)
                                   (map-elt client :instance-count))
                     :command (cons (map-elt client :command)
                                    (map-elt client :command-params))
-                    :stderr stderr-proc
+                    :stderr stderr-buffer
                     :connection-type 'pipe
+                    :coding 'utf-8-emacs-unix
+                    :file-handler t
                     :filter (lambda (_proc input)
                               (acp--log client "INCOMING TEXT" "%s" input)
                               (setq pending-input (concat pending-input input))
@@ -174,8 +208,6 @@ functions for advanced customization or testing."
                                   (setq start (1+ pos)))
                                 (setq pending-input (substring pending-input start))))
                     :sentinel (lambda (_process _event)
-                                (when (process-live-p stderr-proc)
-                                  (delete-process stderr-proc))
                                 (when (buffer-live-p stderr-buffer)
                                   (kill-buffer stderr-buffer))))))
       (map-put! client :process process))))
