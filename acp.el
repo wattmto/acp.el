@@ -201,14 +201,14 @@ On remote hosts, wraps in shell to disable TTY line buffering."
                                 (when (buffer-live-p stderr-buffer)
                                   (kill-buffer stderr-buffer))))))
       ;; Set up stderr process filter for error handling
-      (when-let ((stderr-proc (get-buffer-process stderr-buffer)))
-        (set-process-filter stderr-proc
-                            (lambda (_process raw-output)
-                              (acp--log client "STDERR" "%s" (string-trim raw-output))
-                              (when-let ((api-error (acp--parse-stderr-api-error raw-output)))
-                                (acp--log client "API-ERROR" "%s" (string-trim raw-output))
-                                (dolist (handler (map-elt client :error-handlers))
-                                  (funcall handler api-error))))))
+      ;; (when-let ((stderr-proc (get-buffer-process stderr-buffer)))
+      ;;   (set-process-filter stderr-proc
+      ;;                       (lambda (_process raw-output)
+      ;;                         (acp--log client "STDERR" "%s" (string-trim raw-output))
+      ;;                         (when-let ((api-error (acp--parse-stderr-api-error raw-output)))
+      ;;                           (acp--log client "API-ERROR" "%s" (string-trim raw-output))
+      ;;                           (dolist (handler (map-elt client :error-handlers))
+      ;;                             (funcall handler api-error))))))
       (map-put! client :process process))))
 
 (cl-defun acp-subscribe-to-notifications (&key client on-notification buffer)
